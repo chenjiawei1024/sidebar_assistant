@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+*.log
+
+# Build outputs
+dist/
+build/
+*.zip
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Chrome Extension packaging
+*.crx
+*.pem
+
+# Temporary files
+*.tmp
+.cache/
