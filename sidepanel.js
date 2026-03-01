@@ -528,6 +528,40 @@ function finishStreamingMessage(messageElement, finalContent) {
   if (contentDiv) {
     contentDiv.innerHTML = formatMessage(finalContent);
   }
+
+  // 为完成的流式消息添加操作按钮
+  const actionsDiv = document.createElement('div');
+  actionsDiv.className = 'message-actions';
+
+  // 插入到页面按钮
+  const insertBtn = document.createElement('button');
+  insertBtn.className = 'action-btn';
+  insertBtn.innerHTML = `
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+      <polyline points="7 10 12 15 17 10"/>
+      <line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>
+    <span>插入到页面</span>
+  `;
+  insertBtn.title = '插入到当前页面聚焦的输入框';
+  insertBtn.onclick = () => insertToPage(finalContent, insertBtn);
+
+  // 复制按钮
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'action-btn';
+  copyBtn.innerHTML = `
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+    </svg>
+    <span>复制</span>
+  `;
+  copyBtn.onclick = () => copyToClipboard(finalContent, copyBtn);
+
+  actionsDiv.appendChild(insertBtn);
+  actionsDiv.appendChild(copyBtn);
+  messageElement.appendChild(actionsDiv);
 }
 
 // Add message to UI
@@ -660,34 +694,56 @@ function scrollToBottom() {
 
 // Show toast notification
 function showToast(message, type = 'success') {
+  // 确保只有一个 toast 容器
+  let toastContainer = document.getElementById('toast-container');
+  if (!toastContainer) {
+    toastContainer = document.createElement('div');
+    toastContainer.id = 'toast-container';
+    toastContainer.style.cssText = `
+      position: fixed;
+      top: 16px;
+      left: 0;
+      right: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      pointer-events: none;
+      z-index: 10000;
+    `;
+    document.body.appendChild(toastContainer);
+  }
+
   // Create toast element
   const toast = document.createElement('div');
   toast.style.cssText = `
-    position: fixed;
-    top: 16px;
-    left: 50%;
-    transform: translateX(-50%);
     padding: 10px 16px;
     border-radius: 8px;
     font-size: 13px;
     font-weight: 500;
-    z-index: 1000;
     animation: fadeIn 0.2s ease;
     ${
       type === 'error'
-        ? 'background-color: rgba(239, 68, 68, 0.9); color: white;'
-        : 'background-color: rgba(34, 197, 94, 0.9); color: white;'
+        ? 'background-color: rgba(239, 68, 68, 0.95); color: white;'
+        : 'background-color: rgba(34, 197, 94, 0.95); color: white;'
     }
   `;
   toast.textContent = message;
 
-  document.body.appendChild(toast);
+  toastContainer.appendChild(toast);
 
   // Remove after 2 seconds
   setTimeout(() => {
     toast.style.opacity = '0';
-    toast.style.transition = 'opacity 0.3s ease';
-    setTimeout(() => toast.remove(), 300);
+    toast.style.transform = 'translateY(-8px)';
+    toast.style.transition = 'all 0.3s ease';
+    setTimeout(() => {
+      toast.remove();
+      // 如果没有 toast 了，移除容器
+      if (toastContainer.children.length === 0) {
+        toastContainer.remove();
+      }
+    }, 300);
   }, 2000);
 }
 
@@ -697,48 +753,6 @@ function showToast(message, type = 'success') {
 async function getCurrentTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab;
-}
-
-// 检查是否是特殊页面（无法注入 Content Script 的页面）
-function isSpecialPage(url) {
-  if (!url) return true;
-  return url.startsWith('chrome://') || 
-         url.startsWith('chrome-extension://') || 
-         url.startsWith('edge://') ||
-         url.startsWith('about:') ||
-         url.startsWith('data:');
-}
-
-// 确保 Content Script 已注入
-async function ensureContentScriptInjected(tabId) {
-  try {
-    // 先尝试发送消息，看 content script 是否已存在
-    await chrome.tabs.sendMessage(tabId, { action: 'ping' });
-    return true;
-  } catch (e) {
-    // Content Script 不存在，尝试注入
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        files: ['content.js']
-      });
-      // 等待一小段时间让 script 初始化
-      await new Promise(resolve => setTimeout(resolve, 100));
-      return true;
-    } catch (injectError) {
-      console.error('Failed to inject content script:', injectError);
-      return false;
-    }
-  }
-}
-
-// 发送消息到 Content Script（带自动注入）
-async function sendMessageToContentScript(tabId, message) {
-  const injected = await ensureContentScriptInjected(tabId);
-  if (!injected) {
-    throw new Error('无法在当前页面执行此操作');
-  }
-  return await chrome.tabs.sendMessage(tabId, message);
 }
 
 // 插入文本到页面
@@ -751,16 +765,17 @@ async function insertToPage(text, btnElement) {
       return;
     }
 
-    if (isSpecialPage(tab.url)) {
-      showToast('无法在浏览器内置页面使用此功能', 'error');
-      return;
-    }
+    // 检查是否是特殊页面（chrome:// 等）
+    // if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+    //   showToast('无法在浏览器内置页面使用此功能', 'error');
+    //   return;
+    // }
 
     // 先高亮显示当前聚焦的输入框
-    await sendMessageToContentScript(tab.id, { action: 'highlightInput' });
+    await chrome.tabs.sendMessage(tab.id, { action: 'highlightInput' });
 
     // 发送插入文本消息给 content script
-    const response = await sendMessageToContentScript(tab.id, {
+    const response = await chrome.tabs.sendMessage(tab.id, {
       action: 'insertText',
       text: text,
     });
@@ -790,9 +805,8 @@ async function insertToPage(text, btnElement) {
     }
   } catch (error) {
     console.error('Insert error:', error);
-    if (error.message?.includes('Receiving end does not exist') || 
-        error.message?.includes('无法在当前页面执行')) {
-      showToast('请刷新页面后重试', 'error');
+    if (error.message?.includes('Receiving end does not exist')) {
+      showToast('请刷新页面后再试', 'error');
     } else {
       showToast('插入失败: ' + error.message, 'error');
     }
@@ -831,21 +845,16 @@ async function getSelectedTextFromPage() {
   try {
     const tab = await getCurrentTab();
 
-    if (!tab || isSpecialPage(tab.url)) {
-      showToast('无法在浏览器内置页面使用此功能', 'error');
-      return '';
-    }
+    // if (!tab || tab.url.startsWith('chrome://')) {
+    //   return null;
+    // }
 
-    const response = await sendMessageToContentScript(tab.id, {
+    const response = await chrome.tabs.sendMessage(tab.id, {
       action: 'getSelectedText',
     });
     return response?.text || '';
   } catch (error) {
     console.error('Get selected text error:', error);
-    if (error.message?.includes('Receiving end does not exist') || 
-        error.message?.includes('无法在当前页面执行')) {
-      showToast('请刷新页面后重试', 'error');
-    }
     return '';
   }
 }
@@ -855,11 +864,11 @@ async function getPageContent() {
   try {
     const tab = await getCurrentTab();
 
-    if (!tab || isSpecialPage(tab.url)) {
+    if (!tab || tab.url.startsWith('chrome://')) {
       return null;
     }
 
-    const response = await sendMessageToContentScript(tab.id, {
+    const response = await chrome.tabs.sendMessage(tab.id, {
       action: 'getPageContent',
     });
     return response;

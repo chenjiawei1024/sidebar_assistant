@@ -557,6 +557,11 @@ body {
   margin-bottom: 12px;
 }
 
+/* Toast Container - 确保位置固定 */
+#toast-container {
+  will-change: transform;
+}
+
 /* API Status */
 .api-status {
   display: flex;
@@ -610,12 +615,6 @@ body {
   gap: 8px;
   margin-top: 8px;
   margin-left: 36px;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.message:hover .message-actions {
-  opacity: 1;
 }
 
 .action-btn {
