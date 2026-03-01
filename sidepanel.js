@@ -529,7 +529,7 @@ function finishStreamingMessage(messageElement, finalContent) {
     contentDiv.innerHTML = formatMessage(finalContent);
   }
 
-  // 为完成的流式消息添加操作按钮
+  // 为完成的流式消息添加操作按钮（放在 content 内部右下角）
   const actionsDiv = document.createElement('div');
   actionsDiv.className = 'message-actions';
 
@@ -561,7 +561,7 @@ function finishStreamingMessage(messageElement, finalContent) {
 
   actionsDiv.appendChild(insertBtn);
   actionsDiv.appendChild(copyBtn);
-  messageElement.appendChild(actionsDiv);
+  contentDiv.appendChild(actionsDiv);
 }
 
 // Add message to UI
@@ -580,7 +580,7 @@ function addMessage(role, content) {
   messageDiv.appendChild(avatar);
   messageDiv.appendChild(contentDiv);
 
-  // 为 AI 消息添加操作按钮
+  // 为 AI 消息添加操作按钮（放在 content 内部右下角）
   if (role === 'assistant') {
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'message-actions';
@@ -613,7 +613,7 @@ function addMessage(role, content) {
 
     actionsDiv.appendChild(insertBtn);
     actionsDiv.appendChild(copyBtn);
-    messageDiv.appendChild(actionsDiv);
+    contentDiv.appendChild(actionsDiv);
   }
 
   messagesContainer.appendChild(messageDiv);
