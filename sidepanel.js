@@ -31,10 +31,12 @@ class OpenAI {
                 }
               } else if (message.type === 'done') {
                 resolve({
-                  choices: [{
-                    message: { content: fullContent },
-                    finish_reason: 'stop'
-                  }]
+                  choices: [
+                    {
+                      message: { content: fullContent },
+                      finish_reason: 'stop',
+                    },
+                  ],
                 });
               } else if (message.type === 'error') {
                 const error = new Error(message.error || 'Stream error');
@@ -50,7 +52,7 @@ class OpenAI {
             port.postMessage({
               action: 'chat.completions.stream',
               params: params,
-              apiKey: this.apiKey
+              apiKey: this.apiKey,
             });
           });
         } else {
@@ -155,6 +157,7 @@ const saveSettingsBtn = document.getElementById('saveSettingsBtn');
 const testConnectionBtn = document.getElementById('testConnectionBtn');
 const chatInput = document.getElementById('chatInput');
 const sendBtn = document.getElementById('sendBtn');
+const quoteBtn = document.getElementById('quoteBtn');
 const messagesContainer = document.getElementById('messages');
 const chatContainer = document.getElementById('chatContainer');
 const welcomeState = document.getElementById('welcomeState');
@@ -320,6 +323,21 @@ function setupEventListeners() {
   // Send button
   sendBtn.addEventListener('click', sendMessage);
 
+  // Quote button - 引用页面选中的文本
+  quoteBtn.addEventListener('click', async () => {
+    const selectedText = await getSelectedTextFromPage();
+    if (selectedText) {
+      const currentValue = chatInput.value;
+      const quoteText = `> ${selectedText.replace(/\n/g, '\n> ')}\n\n`;
+      chatInput.value = currentValue + quoteText;
+      handleInput(); // 触发 resize
+      chatInput.focus();
+      showToast('已引用选中的文本');
+    } else {
+      showToast('请先在页面上选中文本', 'error');
+    }
+  });
+
   // Close settings when clicking outside
   document.addEventListener('click', (e) => {
     if (!settingsPanel.contains(e.target) && !settingsBtn.contains(e.target)) {
@@ -418,7 +436,7 @@ async function sendMessage() {
       (chunk, contentSoFar) => {
         fullContent = contentSoFar;
         updateStreamingMessage(currentStreamingElement, fullContent);
-      }
+      },
     );
 
     // Stream completed
@@ -495,7 +513,8 @@ function updateStreamingMessage(messageElement, content) {
   const contentDiv = messageElement.querySelector('.message-content');
   if (contentDiv) {
     // 保留光标元素，更新内容
-    contentDiv.innerHTML = formatMessage(content) + '<span class="streaming-cursor"></span>';
+    contentDiv.innerHTML =
+      formatMessage(content) + '<span class="streaming-cursor"></span>';
     scrollToBottom();
   }
 }
@@ -526,6 +545,42 @@ function addMessage(role, content) {
 
   messageDiv.appendChild(avatar);
   messageDiv.appendChild(contentDiv);
+
+  // 为 AI 消息添加操作按钮
+  if (role === 'assistant') {
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'message-actions';
+
+    // 插入到页面按钮
+    const insertBtn = document.createElement('button');
+    insertBtn.className = 'action-btn';
+    insertBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      <span>插入到页面</span>
+    `;
+    insertBtn.title = '插入到当前页面聚焦的输入框';
+    insertBtn.onclick = () => insertToPage(content, insertBtn);
+
+    // 复制按钮
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'action-btn';
+    copyBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+      </svg>
+      <span>复制</span>
+    `;
+    copyBtn.onclick = () => copyToClipboard(content, copyBtn);
+
+    actionsDiv.appendChild(insertBtn);
+    actionsDiv.appendChild(copyBtn);
+    messageDiv.appendChild(actionsDiv);
+  }
 
   messagesContainer.appendChild(messageDiv);
   scrollToBottom();
@@ -634,6 +689,130 @@ function showToast(message, type = 'success') {
     toast.style.transition = 'opacity 0.3s ease';
     setTimeout(() => toast.remove(), 300);
   }, 2000);
+}
+
+// ==================== 页面内容操作功能 ====================
+
+// 获取当前活动标签页
+async function getCurrentTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab;
+}
+
+// 插入文本到页面
+async function insertToPage(text, btnElement) {
+  try {
+    const tab = await getCurrentTab();
+    
+    if (!tab) {
+      showToast('无法获取当前页面', 'error');
+      return;
+    }
+
+    // 检查是否是特殊页面（chrome:// 等）
+    if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+      showToast('无法在浏览器内置页面使用此功能', 'error');
+      return;
+    }
+
+    // 先高亮显示当前聚焦的输入框
+    await chrome.tabs.sendMessage(tab.id, { action: 'highlightInput' });
+
+    // 发送插入文本消息给 content script
+    const response = await chrome.tabs.sendMessage(tab.id, {
+      action: 'insertText',
+      text: text
+    });
+
+    if (response && response.success) {
+      showToast('已插入到页面');
+      // 按钮反馈
+      if (btnElement) {
+        const originalHTML = btnElement.innerHTML;
+        btnElement.innerHTML = `
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+          <span>已插入</span>
+        `;
+        btnElement.style.color = '#22C55E';
+        setTimeout(() => {
+          btnElement.innerHTML = originalHTML;
+          btnElement.style.color = '';
+        }, 2000);
+      }
+    } else {
+      showToast(response?.error || '插入失败，请先在页面上点击一个输入框', 'error');
+    }
+  } catch (error) {
+    console.error('Insert error:', error);
+    if (error.message?.includes('Receiving end does not exist')) {
+      showToast('请刷新页面后再试', 'error');
+    } else {
+      showToast('插入失败: ' + error.message, 'error');
+    }
+  }
+}
+
+// 复制文本到剪贴板
+async function copyToClipboard(text, btnElement) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('已复制到剪贴板');
+    
+    // 按钮反馈
+    if (btnElement) {
+      const originalHTML = btnElement.innerHTML;
+      btnElement.innerHTML = `
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+        <span>已复制</span>
+      `;
+      btnElement.style.color = '#22C55E';
+      setTimeout(() => {
+        btnElement.innerHTML = originalHTML;
+        btnElement.style.color = '';
+      }, 2000);
+    }
+  } catch (error) {
+    console.error('Copy error:', error);
+    showToast('复制失败', 'error');
+  }
+}
+
+// 获取页面中选中的文本
+async function getSelectedTextFromPage() {
+  try {
+    const tab = await getCurrentTab();
+    
+    if (!tab || tab.url.startsWith('chrome://')) {
+      return null;
+    }
+
+    const response = await chrome.tabs.sendMessage(tab.id, { action: 'getSelectedText' });
+    return response?.text || '';
+  } catch (error) {
+    console.error('Get selected text error:', error);
+    return '';
+  }
+}
+
+// 获取页面内容（用于上下文）
+async function getPageContent() {
+  try {
+    const tab = await getCurrentTab();
+    
+    if (!tab || tab.url.startsWith('chrome://')) {
+      return null;
+    }
+
+    const response = await chrome.tabs.sendMessage(tab.id, { action: 'getPageContent' });
+    return response;
+  } catch (error) {
+    console.error('Get page content error:', error);
+    return null;
+  }
 }
 
 // Initialize on load
