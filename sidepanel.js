@@ -699,29 +699,70 @@ async function getCurrentTab() {
   return tab;
 }
 
+// 检查是否是特殊页面（无法注入 Content Script 的页面）
+function isSpecialPage(url) {
+  if (!url) return true;
+  return url.startsWith('chrome://') || 
+         url.startsWith('chrome-extension://') || 
+         url.startsWith('edge://') ||
+         url.startsWith('about:') ||
+         url.startsWith('data:');
+}
+
+// 确保 Content Script 已注入
+async function ensureContentScriptInjected(tabId) {
+  try {
+    // 先尝试发送消息，看 content script 是否已存在
+    await chrome.tabs.sendMessage(tabId, { action: 'ping' });
+    return true;
+  } catch (e) {
+    // Content Script 不存在，尝试注入
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        files: ['content.js']
+      });
+      // 等待一小段时间让 script 初始化
+      await new Promise(resolve => setTimeout(resolve, 100));
+      return true;
+    } catch (injectError) {
+      console.error('Failed to inject content script:', injectError);
+      return false;
+    }
+  }
+}
+
+// 发送消息到 Content Script（带自动注入）
+async function sendMessageToContentScript(tabId, message) {
+  const injected = await ensureContentScriptInjected(tabId);
+  if (!injected) {
+    throw new Error('无法在当前页面执行此操作');
+  }
+  return await chrome.tabs.sendMessage(tabId, message);
+}
+
 // 插入文本到页面
 async function insertToPage(text, btnElement) {
   try {
     const tab = await getCurrentTab();
-    
+
     if (!tab) {
       showToast('无法获取当前页面', 'error');
       return;
     }
 
-    // 检查是否是特殊页面（chrome:// 等）
-    if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+    if (isSpecialPage(tab.url)) {
       showToast('无法在浏览器内置页面使用此功能', 'error');
       return;
     }
 
     // 先高亮显示当前聚焦的输入框
-    await chrome.tabs.sendMessage(tab.id, { action: 'highlightInput' });
+    await sendMessageToContentScript(tab.id, { action: 'highlightInput' });
 
     // 发送插入文本消息给 content script
-    const response = await chrome.tabs.sendMessage(tab.id, {
+    const response = await sendMessageToContentScript(tab.id, {
       action: 'insertText',
-      text: text
+      text: text,
     });
 
     if (response && response.success) {
@@ -742,12 +783,16 @@ async function insertToPage(text, btnElement) {
         }, 2000);
       }
     } else {
-      showToast(response?.error || '插入失败，请先在页面上点击一个输入框', 'error');
+      showToast(
+        response?.error || '插入失败，请先在页面上点击一个输入框',
+        'error',
+      );
     }
   } catch (error) {
     console.error('Insert error:', error);
-    if (error.message?.includes('Receiving end does not exist')) {
-      showToast('请刷新页面后再试', 'error');
+    if (error.message?.includes('Receiving end does not exist') || 
+        error.message?.includes('无法在当前页面执行')) {
+      showToast('请刷新页面后重试', 'error');
     } else {
       showToast('插入失败: ' + error.message, 'error');
     }
@@ -759,7 +804,7 @@ async function copyToClipboard(text, btnElement) {
   try {
     await navigator.clipboard.writeText(text);
     showToast('已复制到剪贴板');
-    
+
     // 按钮反馈
     if (btnElement) {
       const originalHTML = btnElement.innerHTML;
@@ -785,15 +830,22 @@ async function copyToClipboard(text, btnElement) {
 async function getSelectedTextFromPage() {
   try {
     const tab = await getCurrentTab();
-    
-    if (!tab || tab.url.startsWith('chrome://')) {
-      return null;
+
+    if (!tab || isSpecialPage(tab.url)) {
+      showToast('无法在浏览器内置页面使用此功能', 'error');
+      return '';
     }
 
-    const response = await chrome.tabs.sendMessage(tab.id, { action: 'getSelectedText' });
+    const response = await sendMessageToContentScript(tab.id, {
+      action: 'getSelectedText',
+    });
     return response?.text || '';
   } catch (error) {
     console.error('Get selected text error:', error);
+    if (error.message?.includes('Receiving end does not exist') || 
+        error.message?.includes('无法在当前页面执行')) {
+      showToast('请刷新页面后重试', 'error');
+    }
     return '';
   }
 }
@@ -802,12 +854,14 @@ async function getSelectedTextFromPage() {
 async function getPageContent() {
   try {
     const tab = await getCurrentTab();
-    
-    if (!tab || tab.url.startsWith('chrome://')) {
+
+    if (!tab || isSpecialPage(tab.url)) {
       return null;
     }
 
-    const response = await chrome.tabs.sendMessage(tab.id, { action: 'getPageContent' });
+    const response = await sendMessageToContentScript(tab.id, {
+      action: 'getPageContent',
+    });
     return response;
   } catch (error) {
     console.error('Get page content error:', error);

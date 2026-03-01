@@ -9,7 +9,10 @@
 
   // 监听来自 Side Panel 的消息
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === 'insertText') {
+    if (request.action === 'ping') {
+      // 用于检测 content script 是否已加载
+      sendResponse({ success: true });
+    } else if (request.action === 'insertText') {
       const result = insertTextToFocusedElement(request.text);
       sendResponse(result);
     } else if (request.action === 'highlightInput') {
