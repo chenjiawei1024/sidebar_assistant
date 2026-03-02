@@ -651,3 +651,91 @@ body {
 .action-btn:active {
   transform: scale(0.96);
 }
+
+/* Think 标签样式 - 用于展示模型的思考过程 */
+.message-content .think-block {
+  margin: 8px 0;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.message-content .think-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background-color: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease;
+}
+
+.message-content .think-header:hover {
+  background-color: var(--bg-hover);
+}
+
+.message-content .think-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.message-content .think-header-left svg {
+  width: 12px;
+  height: 12px;
+  opacity: 0.7;
+}
+
+.message-content .think-toggle-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-tertiary);
+  transition: transform 0.2s ease;
+}
+
+.message-content .think-block.expanded .think-toggle-icon {
+  transform: rotate(180deg);
+}
+
+.message-content .think-content {
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  max-height: 200px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+}
+
+.message-content .think-block.collapsed .think-content {
+  max-height: 0;
+  padding: 0 12px;
+  overflow: hidden;
+  transition: max-height 0.2s ease, padding 0.2s ease;
+}
+
+.message-content .think-block.expanded .think-content {
+  transition: max-height 0.2s ease;
+}
+
+/* 思考内容中的代码样式 */
+.message-content .think-content code {
+  font-size: 11px;
+  background-color: var(--bg-secondary);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* 思考块下方的正文间距 */
+.message-content .think-block + * {
+  margin-top: 8px;
+}

@@ -10,7 +10,7 @@
     "scripting"
   ],
   "host_permissions": [
-    "https://api.deepseek.com/*"
+    "<all_urls>"
   ],
   "action": {
     "default_title": "打开 AI 侧边栏"
@@ -25,12 +25,12 @@
     "128": "icons/icon128.png"
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "js/background.js"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["js/content.js"],
       "run_at": "document_end"
     }
   ]

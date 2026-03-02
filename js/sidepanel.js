@@ -1,118 +1,6 @@
 // AI Sidebar - Main Script
 // 通过 Background Service Worker 代理 API 请求，避免 CORS 限制
-
-// ==================== OpenAI Style Client (通过 Background 代理) ====================
-
-class OpenAI {
-  constructor({ apiKey, baseURL, dangerouslyAllowBrowser = false }) {
-    if (!apiKey) {
-      throw new Error('API Key is required');
-    }
-
-    this.apiKey = apiKey;
-    this.baseURL = baseURL || 'https://api.deepseek.com/v1';
-  }
-
-  // Chat Completions API - 流式版本
-  chat = {
-    completions: {
-      create: async (params, onChunk) => {
-        // 如果是流式请求，使用长连接
-        if (params.stream) {
-          return new Promise((resolve, reject) => {
-            const port = chrome.runtime.connect({ name: 'chat-stream' });
-            let fullContent = '';
-
-            port.onMessage.addListener((message) => {
-              if (message.type === 'chunk') {
-                fullContent += message.content;
-                if (onChunk) {
-                  onChunk(message.content, fullContent);
-                }
-              } else if (message.type === 'done') {
-                resolve({
-                  choices: [
-                    {
-                      message: { content: fullContent },
-                      finish_reason: 'stop',
-                    },
-                  ],
-                });
-              } else if (message.type === 'error') {
-                const error = new Error(message.error || 'Stream error');
-                error.status = message.status;
-                reject(error);
-              }
-            });
-
-            port.onDisconnect.addListener(() => {
-              // 连接断开时的处理
-            });
-
-            port.postMessage({
-              action: 'chat.completions.stream',
-              params: params,
-              apiKey: this.apiKey,
-            });
-          });
-        } else {
-          // 非流式请求（兼容旧代码）
-          return new Promise((resolve, reject) => {
-            chrome.runtime.sendMessage(
-              {
-                action: 'chat.completions.create',
-                params: params,
-                apiKey: this.apiKey,
-              },
-              (response) => {
-                if (chrome.runtime.lastError) {
-                  reject(new Error(chrome.runtime.lastError.message));
-                  return;
-                }
-
-                if (response.success) {
-                  resolve(response.data);
-                } else {
-                  const error = new Error(response.error || 'Unknown error');
-                  error.status = response.status;
-                  reject(error);
-                }
-              },
-            );
-          });
-        }
-      },
-    },
-  };
-
-  // Models API - 通过 Background Script 代理
-  models = {
-    list: async () => {
-      return new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage(
-          {
-            action: 'models.list',
-            apiKey: this.apiKey,
-          },
-          (response) => {
-            if (chrome.runtime.lastError) {
-              reject(new Error(chrome.runtime.lastError.message));
-              return;
-            }
-
-            if (response.success) {
-              resolve(response.data);
-            } else {
-              const error = new Error(response.error || 'Unknown error');
-              error.status = response.status;
-              reject(error);
-            }
-          },
-        );
-      });
-    },
-  };
-}
+// OpenAI 类已抽离到 js/openai.js
 
 // 验证 API Key 格式
 function validateApiKey(key) {
@@ -135,14 +23,17 @@ function validateApiKey(key) {
 
 // ==================== Main Application ====================
 
-// Configuration
-const API_BASE_URL = 'https://api.deepseek.com/v1';
+// Configuration - 默认值
+const DEFAULT_API_URL = 'http://lanz.hikvision.com/v3/openai';
+const DEFAULT_MODEL = 'Qwen3-Coder-Flash';
+const STORAGE_KEY_API_URL = 'ai_sidebar_api_url';
 const STORAGE_KEY_API_KEY = 'ai_sidebar_api_key';
 const STORAGE_KEY_MODEL = 'ai_sidebar_model';
 
 // State
+let apiUrl = '';
 let apiKey = '';
-let currentModel = 'gpt-3.5-turbo';
+let currentModel = DEFAULT_MODEL;
 let isGenerating = false;
 let messageHistory = [];
 let openaiClient = null;
@@ -151,6 +42,7 @@ let currentStreamingElement = null;
 // DOM Elements
 const settingsBtn = document.getElementById('settingsBtn');
 const settingsPanel = document.getElementById('settingsPanel');
+const apiUrlInput = document.getElementById('apiUrlInput');
 const apiKeyInput = document.getElementById('apiKeyInput');
 const modelInput = document.getElementById('modelInput');
 const saveSettingsBtn = document.getElementById('saveSettingsBtn');
@@ -166,6 +58,7 @@ const welcomeState = document.getElementById('welcomeState');
 async function init() {
   await loadSettings();
   setupEventListeners();
+  setupThinkBlockEventDelegation();
   updateSendButton();
   initOpenAIClient();
 }
@@ -177,13 +70,16 @@ function initOpenAIClient() {
     return;
   }
 
+  // 使用用户配置的 API 地址，如果没有配置则使用默认值
+  const baseURL = apiUrl || DEFAULT_API_URL;
+
   try {
     openaiClient = new OpenAI({
       apiKey: apiKey,
-      baseURL: API_BASE_URL,
+      baseURL: baseURL,
       dangerouslyAllowBrowser: true,
     });
-    console.log('OpenAI client initialized');
+    console.log('OpenAI client initialized with baseURL:', baseURL);
   } catch (error) {
     console.error('Failed to initialize OpenAI client:', error);
     openaiClient = null;
@@ -194,13 +90,17 @@ function initOpenAIClient() {
 async function loadSettings() {
   try {
     const result = await chrome.storage.local.get([
+      STORAGE_KEY_API_URL,
       STORAGE_KEY_API_KEY,
       STORAGE_KEY_MODEL,
     ]);
+    // 如果没有保存的API地址，使用默认值
+    apiUrl = result[STORAGE_KEY_API_URL] || DEFAULT_API_URL;
     apiKey = result[STORAGE_KEY_API_KEY] || '';
-    currentModel = result[STORAGE_KEY_MODEL] || 'gpt-3.5-turbo';
+    currentModel = result[STORAGE_KEY_MODEL] || DEFAULT_MODEL;
 
     // Update UI
+    apiUrlInput.value = apiUrl;
     apiKeyInput.value = apiKey;
     modelInput.value = currentModel;
   } catch (error) {
@@ -210,8 +110,9 @@ async function loadSettings() {
 
 // Save settings to storage
 async function saveSettings() {
+  const newApiUrl = apiUrlInput.value.trim();
   const newApiKey = apiKeyInput.value.trim();
-  const newModel = modelInput.value.trim() || 'gpt-3.5-turbo';
+  const newModel = modelInput.value.trim() || DEFAULT_MODEL;
 
   // Validate API Key format
   if (newApiKey) {
@@ -223,6 +124,7 @@ async function saveSettings() {
     }
   }
 
+  apiUrl = newApiUrl;
   apiKey = newApiKey;
   currentModel = newModel;
 
@@ -231,6 +133,7 @@ async function saveSettings() {
 
   try {
     await chrome.storage.local.set({
+      [STORAGE_KEY_API_URL]: apiUrl,
       [STORAGE_KEY_API_KEY]: apiKey,
       [STORAGE_KEY_MODEL]: currentModel,
     });
@@ -249,8 +152,9 @@ async function saveSettings() {
 
 // Test API connection
 async function testConnection() {
+  const testApiUrl = apiUrlInput.value.trim();
   const testApiKey = apiKeyInput.value.trim();
-  const testModel = modelInput.value.trim() || 'gpt-3.5-turbo';
+  const testModel = modelInput.value.trim() || DEFAULT_MODEL;
 
   // Validate format first
   const validation = validateApiKey(testApiKey);
@@ -262,30 +166,37 @@ async function testConnection() {
   testConnectionBtn.disabled = true;
   testConnectionBtn.textContent = '测试中...';
 
+  // 使用用户配置的 API 地址，如果没有配置则使用默认值
+  const testBaseURL = testApiUrl || DEFAULT_API_URL;
+
   try {
     // Create temporary client for testing
     const testClient = new OpenAI({
       apiKey: testApiKey,
-      baseURL: API_BASE_URL,
+      baseURL: testBaseURL,
       dangerouslyAllowBrowser: true,
     });
 
-    const models = await testClient.models.list();
-    const modelCount = models.data?.length || 0;
-
-    // Check if requested model is available
-    const requestedModelAvailable = models.data?.some(
-      (m) => m.id === testModel,
+    // 使用简单的聊天请求测试连接（而非 /models 接口）
+    const response = await testClient.chat.completions.create(
+      {
+        model: testModel,
+        messages: [{ role: 'user', content: 'Test Connection...' }],
+        stream: false, // 非流式请求
+      },
+      null
     );
 
-    if (requestedModelAvailable) {
-      showToast(`连接成功！模型 "${testModel}" 可用`);
-    } else if (modelCount > 0) {
-      showToast(
-        `连接成功！但 "${testModel}" 可能不可用，可用模型: ${modelCount}个`,
-      );
+    // 检查是否返回了有效响应
+    if (response && response.choices && response.choices.length > 0) {
+      const content = response.choices[0].message?.content;
+      if (content) {
+        showToast(`连接成功！模型 "${testModel}" 可用`);
+      } else {
+        showToast('连接成功，但未返回内容');
+      }
     } else {
-      showToast('连接成功！');
+      showToast('连接成功！但响应格式异常');
     }
   } catch (error) {
     console.error('Test connection error:', error);
@@ -294,6 +205,8 @@ async function testConnection() {
       showToast('API Key 无效，请检查 Key 是否正确', 'error');
     } else if (error.status === 429) {
       showToast('请求过于频繁，请稍后再试', 'error');
+    } else if (error.status === 404) {
+      showToast(`模型 "${testModel}" 不存在，请检查模型名称`, 'error');
     } else if (error.message) {
       showToast(`连接失败: ${error.message}`, 'error');
     } else {
@@ -328,7 +241,7 @@ function setupEventListeners() {
     const selectedText = await getSelectedTextFromPage();
     if (selectedText) {
       const currentValue = chatInput.value;
-      const quoteText = `> ${selectedText.replace(/\n/g, '\n> ')}\n\n`;
+      const quoteText = `> ${selectedText.replace(/\n/g, '\n> ')}\n`;
       chatInput.value = currentValue + quoteText;
       handleInput(); // 触发 resize
       chatInput.focus();
@@ -431,6 +344,7 @@ async function sendMessage() {
         messages: messageHistory,
         temperature: 0.7,
         stream: true,
+        timeout: 30000
       },
       // onChunk callback - 每次收到数据时更新
       (chunk, contentSoFar) => {
@@ -658,13 +572,24 @@ function removeLoadingMessage(id) {
   }
 }
 
-// Format message content (simple markdown)
+// Format message content (simple markdown) - 支持 thinking 标签
 function formatMessage(content) {
+  // 先提取 thinking 块，替换为占位符，避免被 HTML 转义
+  const thinkPlaceholder = '__THINK_BLOCK__';
+  const thinkRegex = /<(think|thinking|thought)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi;
+  const thinkBlocks = [];
+  
+  let formatted = content.replace(thinkRegex, (match, tag, innerContent) => {
+    const index = thinkBlocks.length;
+    thinkBlocks.push(innerContent.trim());
+    return `${thinkPlaceholder}${index}${thinkPlaceholder}`;
+  });
+
   // Escape HTML
-  let formatted = content
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  formatted = formatted
+    .replace(/&/g, '&')
+    .replace(/</g, '<')
+    .replace(/>/g, '>');
 
   // Bold: **text**
   formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
@@ -681,10 +606,55 @@ function formatMessage(content) {
   // Inline code: `code`
   formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
 
-  // Line breaks
-  formatted = formatted.replace(/\n/g, '<br>');
+  // 恢复 thinking 块并转换为可折叠的 HTML
+  formatted = formatted.replace(
+    new RegExp(`${thinkPlaceholder}(\\d+)${thinkPlaceholder}`, 'g'),
+    (match, index) => {
+      const thinkContent = thinkBlocks[parseInt(index)];
+      if (!thinkContent) return '';
+      
+      return `
+        <div class="think-block collapsed">
+          <div class="think-header">
+            <div class="think-header-left">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                <line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
+              <span>思考中</span>
+            </div>
+            <svg class="think-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+          <div class="think-content">${thinkContent}</div>
+        </div>
+      `;
+    },
+  );
 
   return formatted;
+}
+
+// 切换 thinking 块的展开/折叠状态
+function toggleThinkBlock(element) {
+  element.classList.toggle('collapsed');
+  element.classList.toggle('expanded');
+}
+
+// 使用事件委托处理 think 块的点击事件
+function setupThinkBlockEventDelegation() {
+  messagesContainer.addEventListener('click', function(e) {
+    // 查找点击的 think-header 元素
+    const header = e.target.closest('.think-header');
+    if (header) {
+      const thinkBlock = header.parentElement;
+      if (thinkBlock && thinkBlock.classList.contains('think-block')) {
+        toggleThinkBlock(thinkBlock);
+      }
+    }
+  });
 }
 
 // Scroll to bottom
