@@ -459,7 +459,7 @@ function finishStreamingMessage(messageElement, finalContent) {
     <span>插入到页面</span>
   `;
   insertBtn.title = '插入到当前页面聚焦的输入框';
-  insertBtn.onclick = () => insertToPage(finalContent, insertBtn);
+  insertBtn.onclick = () => insertToPage(removeThinkTags(finalContent), insertBtn);
 
   // 复制按钮
   const copyBtn = document.createElement('button');
@@ -511,7 +511,7 @@ function addMessage(role, content) {
       <span>插入到页面</span>
     `;
     insertBtn.title = '插入到当前页面聚焦的输入框';
-    insertBtn.onclick = () => insertToPage(content, insertBtn);
+    insertBtn.onclick = () => insertToPage(removeThinkTags(content), insertBtn);
 
     // 复制按钮
     const copyBtn = document.createElement('button');
@@ -719,10 +719,43 @@ function showToast(message, type = 'success') {
 
 // ==================== 页面内容操作功能 ====================
 
+// 移除 think/thinking 标签及其内容
+function removeThinkTags(content) {
+  if (!content) return '';
+  // 匹配 <think>、<thinking>、<thought> 及其变体
+  return content.replace(/<(think|thinking|thought)(?:\s[^>]*)?>[\s\S]*?<\/\1>/gi, '').trim();
+}
+
 // 获取当前活动标签页
 async function getCurrentTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab;
+}
+
+// 检查 content script 是否已加载
+async function isContentScriptLoaded(tabId) {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, { action: 'ping' });
+    return response && response.success;
+  } catch (error) {
+    return false;
+  }
+}
+
+// 动态注入 content script
+async function injectContentScript(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      files: ['js/content.js']
+    });
+    // 给一点时间让 content script 初始化
+    await new Promise(resolve => setTimeout(resolve, 100));
+    return true;
+  } catch (error) {
+    console.error('Failed to inject content script:', error);
+    return false;
+  }
 }
 
 // 插入文本到页面
@@ -736,10 +769,20 @@ async function insertToPage(text, btnElement) {
     }
 
     // 检查是否是特殊页面（chrome:// 等）
-    // if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
-    //   showToast('无法在浏览器内置页面使用此功能', 'error');
-    //   return;
-    // }
+    if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://') || tab.url.startsWith('edge://'))) {
+      showToast('无法在浏览器内置页面使用此功能', 'error');
+      return;
+    }
+
+    // 检查 content script 是否已加载，如果没有则动态注入
+    const isLoaded = await isContentScriptLoaded(tab.id);
+    if (!isLoaded) {
+      const injected = await injectContentScript(tab.id);
+      if (!injected) {
+        showToast('无法注入页面脚本，请刷新页面后再试', 'error');
+        return;
+      }
+    }
 
     // 先高亮显示当前聚焦的输入框
     await chrome.tabs.sendMessage(tab.id, { action: 'highlightInput' });
@@ -776,7 +819,7 @@ async function insertToPage(text, btnElement) {
   } catch (error) {
     console.error('Insert error:', error);
     if (error.message?.includes('Receiving end does not exist')) {
-      showToast('请刷新页面后再试', 'error');
+      showToast('页面脚本未响应，请刷新页面后再试', 'error');
     } else {
       showToast('插入失败: ' + error.message, 'error');
     }
@@ -815,9 +858,24 @@ async function getSelectedTextFromPage() {
   try {
     const tab = await getCurrentTab();
 
-    // if (!tab || tab.url.startsWith('chrome://')) {
-    //   return null;
-    // }
+    if (!tab) {
+      return '';
+    }
+
+    // 检查是否是特殊页面
+    if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://') || tab.url.startsWith('edge://'))) {
+      return '';
+    }
+
+    // 检查 content script 是否已加载，如果没有则动态注入
+    const isLoaded = await isContentScriptLoaded(tab.id);
+    if (!isLoaded) {
+      const injected = await injectContentScript(tab.id);
+      if (!injected) {
+        console.log('无法注入 content script 到当前页面');
+        return '';
+      }
+    }
 
     const response = await chrome.tabs.sendMessage(tab.id, {
       action: 'getSelectedText',
