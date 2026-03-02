@@ -1,41 +1,99 @@
 // Content Script - 运行在网页上下文中，可访问 DOM
+// 负责：页面文本操作、手绘覆盖层展示、与 Side Panel 通信
 
 (function() {
   'use strict';
 
-  // 高亮当前聚焦的输入框
-  let highlightedElement = null;
-  let highlightOverlay = null;
-  let arrowOverlay = null;
+  // ==================== 初始化 ====================
+  
+  // 创建手绘覆盖层实例（用于箭头、矩形框等效果）
+  const handDrawnOverlay = new HandDrawnOverlay();
 
-  // 监听来自 Side Panel 的消息
+  // 记录当前高亮的目标元素
+  let highlightedElement = null;
+
+  console.log('[AI Sidebar] Content script loaded');
+
+  // ==================== 消息处理器 ====================
+  
+  /**
+   * 处理来自 Side Panel 的消息
+   * 根据 action 类型分发到不同的处理函数
+   */
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === 'ping') {
-      // 用于检测 content script 是否已加载
-      sendResponse({ success: true });
-    } else if (request.action === 'insertText') {
-      const result = insertTextToFocusedElement(request.text);
-      sendResponse(result);
-    } else if (request.action === 'highlightInput') {
-      highlightFocusedInputWithArrow();
-      sendResponse({ success: true });
-    } else if (request.action === 'clearHighlight') {
-      clearHighlight();
-      sendResponse({ success: true });
-    } else if (request.action === 'getSelectedText') {
-      sendResponse({ text: window.getSelection().toString() });
-    } else if (request.action === 'getPageContent') {
-      sendResponse({
-        title: document.title,
-        url: window.location.href,
-        content: getPageTextContent()
+    // 使用 Promise 包装异步操作，统一处理错误
+    handleMessage(request)
+      .then(result => sendResponse(result))
+      .catch(error => {
+        console.error('[AI Sidebar] Message handler error:', error);
+        sendResponse({ success: false, error: error.message });
       });
-    }
+    
+    // 保持消息通道开放（支持异步响应）
     return true;
   });
 
-  // 插入文本到当前聚焦的元素
-  function insertTextToFocusedElement(text) {
+  /**
+   * 消息分发器
+   * @param {Object} request - 消息内容
+   * @returns {Promise<Object>} 处理结果
+   */
+  async function handleMessage(request) {
+    const { action } = request;
+
+    switch (action) {
+      // 基础检测
+      case 'ping':
+        return { success: true, message: 'pong' };
+
+      // 文本插入
+      case 'insertText':
+        return handleInsertText(request.text);
+
+      // 高亮当前聚焦的输入框（箭头指向）
+      case 'highlightInput':
+        return handleHighlightInput();
+
+      // 清除所有覆盖层
+      case 'clearHighlight':
+      case 'clearOverlays':
+        return handleClearOverlays();
+
+      // 绘制箭头到指定元素
+      case 'drawArrow':
+        return handleDrawArrow(request.selector, request.options);
+
+      // 绘制矩形框选指定元素
+      case 'drawRect':
+        return handleDrawRect(request.selector, request.options);
+
+      // 同时绘制箭头和矩形
+      case 'drawArrowAndRect':
+        return handleDrawArrowAndRect(request.selector, request.options);
+
+      // 获取页面选中的文本
+      case 'getSelectedText':
+        return handleGetSelectedText();
+
+      // 获取页面内容
+      case 'getPageContent':
+        return handleGetPageContent();
+
+      default:
+        throw new Error(`Unknown action: ${action}`);
+    }
+  }
+
+  // ==================== 具体消息处理函数 ====================
+
+  /**
+   * 处理文本插入请求
+   * 将文本插入到当前聚焦的输入框或 contenteditable 元素
+   * 
+   * @param {string} text - 要插入的文本
+   * @returns {Object} { success: boolean, type?: string, error?: string }
+   */
+  function handleInsertText(text) {
     const activeElement = document.activeElement;
     
     if (!activeElement) {
@@ -43,249 +101,244 @@
     }
 
     // 处理 input 和 textarea
-    if (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA') {
-      const start = activeElement.selectionStart || 0;
-      const end = activeElement.selectionEnd || 0;
-      const value = activeElement.value || '';
-      
-      // 在光标位置插入文本
-      activeElement.value = value.substring(0, start) + text + value.substring(end);
-      
-      // 移动光标到插入文本之后
-      const newCursorPos = start + text.length;
-      activeElement.selectionStart = activeElement.selectionEnd = newCursorPos;
-      
-      // 触发 input 事件，让页面知道内容已更改
-      activeElement.dispatchEvent(new Event('input', { bubbles: true }));
-      activeElement.dispatchEvent(new Event('change', { bubbles: true }));
-      
-      // 保持聚焦
-      activeElement.focus();
-      
+    if (isInputElement(activeElement)) {
+      insertTextToInput(activeElement, text);
       return { success: true, type: 'input' };
     }
     
     // 处理 contenteditable 元素
     if (activeElement.isContentEditable) {
-      const selection = window.getSelection();
-      
-      if (selection.rangeCount > 0) {
-        const range = selection.getRangeAt(0);
-        range.deleteContents();
-        
-        const textNode = document.createTextNode(text);
-        range.insertNode(textNode);
-        
-        // 移动光标到插入文本之后
-        range.setStartAfter(textNode);
-        range.setEndAfter(textNode);
-        selection.removeAllRanges();
-        selection.addRange(range);
-        
-        // 触发输入事件
-        activeElement.dispatchEvent(new InputEvent('input', { bubbles: true }));
-      }
-      
+      insertTextToContentEditable(activeElement, text);
       return { success: true, type: 'contenteditable' };
     }
 
     return { success: false, error: '当前聚焦的元素不是可输入元素' };
   }
 
-  // 生成手绘风格的随机扰动路径点
-  function generateRoughPoints(x1, y1, x2, y2, segments = 20) {
-    const points = [];
-    const dx = x2 - x1;
-    const dy = y2 - y1;
-    
-    for (let i = 0; i <= segments; i++) {
-      const t = i / segments;
-      // 基础线性插值
-      let x = x1 + dx * t;
-      let y = y1 + dy * t;
-      
-      // 添加手绘风格的随机扰动（中间部分扰动更大）
-      const roughness = 3;
-      const randomOffset = Math.sin(t * Math.PI) * roughness;
-      x += (Math.random() - 0.5) * randomOffset * 2;
-      y += (Math.random() - 0.5) * randomOffset * 2;
-      
-      points.push({ x, y });
-    }
-    return points;
-  }
-
-  // 生成平滑的手绘风格 SVG 路径
-  function generateRoughPath(x1, y1, x2, y2) {
-    const points = generateRoughPoints(x1, y1, x2, y2);
-    
-    // 使用二次贝塞尔曲线连接点，创建平滑但有机的线条
-    let path = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
-    
-    for (let i = 1; i < points.length - 1; i++) {
-      const xc = (points[i].x + points[i + 1].x) / 2;
-      const yc = (points[i].y + points[i + 1].y) / 2;
-      path += ` Q ${points[i].x.toFixed(1)} ${points[i].y.toFixed(1)}, ${xc.toFixed(1)} ${yc.toFixed(1)}`;
-    }
-    
-    // 连接到终点
-    const last = points[points.length - 1];
-    path += ` L ${last.x.toFixed(1)} ${last.y.toFixed(1)}`;
-    
-    return path;
-  }
-
-  // 生成手绘风格的箭头头部路径
-  function generateRoughArrowHead(tipX, tipY, angle, size = 20) {
-    const leftAngle = angle + Math.PI / 6 + (Math.random() - 0.5) * 0.2;
-    const rightAngle = angle - Math.PI / 6 + (Math.random() - 0.5) * 0.2;
-    
-    const leftX = tipX - Math.cos(leftAngle) * size;
-    const leftY = tipY - Math.sin(leftAngle) * size;
-    const rightX = tipX - Math.cos(rightAngle) * size;
-    const rightY = tipY - Math.sin(rightAngle) * size;
-    
-    // 添加轻微扰动使线条更自然
-    const r1 = 2;
-    const r2 = 2;
-    
-    return `M ${(tipX + (Math.random() - 0.5) * r1).toFixed(1)} ${(tipY + (Math.random() - 0.5) * r1).toFixed(1)} ` +
-           `L ${(leftX + (Math.random() - 0.5) * r2).toFixed(1)} ${(leftY + (Math.random() - 0.5) * r2).toFixed(1)} ` +
-           `M ${(tipX + (Math.random() - 0.5) * r1).toFixed(1)} ${(tipY + (Math.random() - 0.5) * r1).toFixed(1)} ` +
-           `L ${(rightX + (Math.random() - 0.5) * r2).toFixed(1)} ${(rightY + (Math.random() - 0.5) * r2).toFixed(1)}`;
-  }
-
-  // 创建手绘风格的 SVG 箭头
-  function createHandDrawnArrow(targetRect) {
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      pointer-events: none;
-      z-index: 999999;
-    `;
-    svg.setAttribute('width', '100%');
-    svg.setAttribute('height', '100%');
-    svg.setAttribute('viewBox', `0 0 ${window.innerWidth} ${window.innerHeight}`);
-    
-    // 计算箭头起点（从页面右侧边缘往内缩进，尾巴长度约 48-60px）
-    const startX = window.innerWidth - 60;
-    const startY = window.innerHeight / 2;
-    
-    // 计算箭头终点（输入框中心）
-    const endX = targetRect.left + targetRect.width / 2;
-    const endY = targetRect.top + targetRect.height / 2;
-    
-    // 计算箭头角度
-    const angle = Math.atan2(endY - startY, endX - startX);
-    
-    // 创建滤镜用于手绘效果
-    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-    const filter = document.createElementNS('http://www.w3.org/2000/svg', 'filter');
-    filter.setAttribute('id', 'rough-filter');
-    filter.innerHTML = `
-      <feTurbulence type="fractalNoise" baseFrequency="0.05" numOctaves="2" result="noise"/>
-      <feDisplacementMap in="SourceGraphic" in2="noise" scale="2" xChannelSelector="R" yChannelSelector="G"/>
-    `;
-    defs.appendChild(filter);
-    svg.appendChild(defs);
-    
-    // 使用二次贝塞尔曲线创建平滑曲线路径
-    const roughPath = generateRoughPath(startX, startY, endX, endY);
-    
-    // 创建路径元素
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', roughPath);
-    path.setAttribute('stroke', '#1a1a1a');
-    path.setAttribute('stroke-width', '4');
-    path.setAttribute('fill', 'none');
-    path.setAttribute('stroke-linecap', 'round');
-    path.setAttribute('stroke-linejoin', 'round');
-    path.setAttribute('filter', 'url(#rough-filter)');
-    
-    // 创建箭头头部
-    const arrowHeadPath = generateRoughArrowHead(endX, endY, angle, 18);
-    const arrowHead = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    arrowHead.setAttribute('d', arrowHeadPath);
-    arrowHead.setAttribute('stroke', '#1a1a1a');
-    arrowHead.setAttribute('stroke-width', '4');
-    arrowHead.setAttribute('fill', 'none');
-    arrowHead.setAttribute('stroke-linecap', 'round');
-    arrowHead.setAttribute('stroke-linejoin', 'round');
-    arrowHead.setAttribute('filter', 'url(#rough-filter)');
-    
-    svg.appendChild(path);
-    svg.appendChild(arrowHead);
-    
-    return svg;
-  }
-
-  // 使用手绘箭头高亮当前聚焦的输入框
-  function highlightFocusedInputWithArrow() {
-    clearHighlight();
+  /**
+   * 处理高亮输入框请求
+   * 使用手绘箭头指向当前聚焦的输入框
+   * 
+   * @returns {Object} { success: boolean }
+   */
+  function handleHighlightInput() {
+    // 清除之前的覆盖层
+    handDrawnOverlay.clearAll();
     
     const activeElement = document.activeElement;
-    if (!activeElement || (activeElement.tagName !== 'INPUT' && activeElement.tagName !== 'TEXTAREA' && !activeElement.isContentEditable)) {
-      return;
+    
+    // 检查是否是有效的输入元素
+    if (!activeElement || !isEditableElement(activeElement)) {
+      return { success: false, error: '当前没有聚焦的输入框' };
     }
 
     highlightedElement = activeElement;
-    const rect = activeElement.getBoundingClientRect();
     
-    // 创建手绘风格箭头
-    arrowOverlay = createHandDrawnArrow(rect);
-    document.body.appendChild(arrowOverlay);
-    
-    // 3秒后自动清除
-    setTimeout(clearHighlight, 3000);
+    // 绘制箭头指向输入框
+    handDrawnOverlay.drawArrowToElement(activeElement, {
+      tailLength: 60,
+      color: '#1a1a1a',
+      strokeWidth: 4,
+      duration: 3000
+    });
+
+    return { success: true };
   }
 
-  // 清除高亮
-  function clearHighlight() {
-    if (highlightOverlay) {
-      highlightOverlay.remove();
-      highlightOverlay = null;
-    }
-    if (arrowOverlay) {
-      arrowOverlay.remove();
-      arrowOverlay = null;
-    }
+  /**
+   * 处理清除覆盖层请求
+   * @returns {Object} { success: boolean }
+   */
+  function handleClearOverlays() {
+    handDrawnOverlay.clearAll();
     highlightedElement = null;
+    return { success: true };
   }
 
-  // 获取页面文本内容（用于上下文）
-  function getPageTextContent() {
-    // 尝试获取主要内容区域
-    const selectors = [
-      'article',
-      'main',
-      '[role="main"]',
-      '.content',
-      '.post-content',
-      '.article-content',
-      '#content'
+  /**
+   * 处理绘制箭头请求
+   * @param {string} selector - CSS 选择器
+   * @param {Object} options - 绘制选项
+   * @returns {Object} { success: boolean, id?: string, error?: string }
+   */
+  function handleDrawArrow(selector, options = {}) {
+    const element = document.querySelector(selector);
+    if (!element) {
+      return { success: false, error: '元素未找到: ' + selector };
+    }
+    
+    const id = handDrawnOverlay.drawArrowToElement(element, options);
+    return { success: true, id };
+  }
+
+  /**
+   * 处理绘制矩形请求
+   * @param {string} selector - CSS 选择器
+   * @param {Object} options - 绘制选项
+   * @returns {Object} { success: boolean, id?: string, error?: string }
+   */
+  function handleDrawRect(selector, options = {}) {
+    const element = document.querySelector(selector);
+    if (!element) {
+      return { success: false, error: '元素未找到: ' + selector };
+    }
+    
+    const id = handDrawnOverlay.drawRectAroundElement(element, options);
+    return { success: true, id };
+  }
+
+  /**
+   * 处理同时绘制箭头和矩形请求
+   * @param {string} selector - CSS 选择器
+   * @param {Object} options - 绘制选项
+   * @returns {Object} { success: boolean, ids?: Object, error?: string }
+   */
+  function handleDrawArrowAndRect(selector, options = {}) {
+    const element = document.querySelector(selector);
+    if (!element) {
+      return { success: false, error: '元素未找到: ' + selector };
+    }
+    
+    const ids = handDrawnOverlay.drawArrowAndRect(element, options);
+    return { success: true, ids };
+  }
+
+  /**
+   * 获取页面选中的文本
+   * @returns {Object} { text: string }
+   */
+  function handleGetSelectedText() {
+    const text = window.getSelection().toString();
+    return { text };
+  }
+
+  /**
+   * 获取页面内容
+   * @returns {Object} { title: string, url: string, content: string }
+   */
+  function handleGetPageContent() {
+    return {
+      title: document.title,
+      url: window.location.href,
+      content: extractMainContent()
+    };
+  }
+
+  // ==================== 工具函数 ====================
+
+  /**
+   * 检查元素是否是 input 或 textarea
+   * @param {HTMLElement} element 
+   * @returns {boolean}
+   */
+  function isInputElement(element) {
+    const tag = element.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA';
+  }
+
+  /**
+   * 检查元素是否是可编辑元素
+   * @param {HTMLElement} element 
+   * @returns {boolean}
+   */
+  function isEditableElement(element) {
+    return isInputElement(element) || element.isContentEditable;
+  }
+
+  /**
+   * 插入文本到 input 或 textarea 元素
+   * @param {HTMLInputElement|HTMLTextAreaElement} element - 输入元素
+   * @param {string} text - 要插入的文本
+   */
+  function insertTextToInput(element, text) {
+    const start = element.selectionStart || 0;
+    const end = element.selectionEnd || 0;
+    const value = element.value || '';
+    
+    // 在光标位置插入文本
+    element.value = value.substring(0, start) + text + value.substring(end);
+    
+    // 移动光标到插入文本之后
+    const newCursorPos = start + text.length;
+    element.selectionStart = element.selectionEnd = newCursorPos;
+    
+    // 触发事件，让页面知道内容已更改
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+    
+    // 保持聚焦
+    element.focus();
+  }
+
+  /**
+   * 插入文本到 contenteditable 元素
+   * @param {HTMLElement} element - 可编辑元素
+   * @param {string} text - 要插入的文本
+   */
+  function insertTextToContentEditable(element, text) {
+    const selection = window.getSelection();
+    
+    if (selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      
+      const textNode = document.createTextNode(text);
+      range.insertNode(textNode);
+      
+      // 移动光标到插入文本之后
+      range.setStartAfter(textNode);
+      range.setEndAfter(textNode);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      
+      // 触发输入事件
+      element.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    }
+    
+    // 保持聚焦
+    element.focus();
+  }
+
+  /**
+   * 提取页面主要内容
+   * 按优先级尝试多个选择器
+   * @returns {string} 页面文本内容
+   */
+  function extractMainContent() {
+    // 按优先级排序的选择器列表
+    const contentSelectors = [
+      'article',           // 文章标签
+      'main',              // 主内容区
+      '[role="main"]',     // ARIA 主内容标记
+      '.content',          // 常见内容类名
+      '.post-content',     // 博客/文章类名
+      '.article-content',  // 文章类名
+      '#content'           // 常见内容 ID
     ];
     
-    for (const selector of selectors) {
+    // 尝试找到主要内容区域
+    for (const selector of contentSelectors) {
       const element = document.querySelector(selector);
       if (element) {
         return element.innerText.substring(0, 5000); // 限制长度
       }
     }
     
-    // 默认返回 body 文本
+    // 回退到 body 文本
     return document.body.innerText.substring(0, 3000);
   }
 
-  // 监听聚焦事件，自动清除旧高亮
+  // ==================== 事件监听 ====================
+
+  /**
+   * 监听聚焦事件，自动清除旧高亮
+   * 当用户点击其他输入框时，清除之前的箭头/矩形框
+   */
   document.addEventListener('focusin', () => {
-    if (highlightOverlay || arrowOverlay) {
-      clearHighlight();
+    if (handDrawnOverlay.getActiveOverlays().length > 0) {
+      handDrawnOverlay.clearAll();
+      highlightedElement = null;
     }
   }, true);
 
-  console.log('[AI Sidebar] Content script loaded');
 })();
