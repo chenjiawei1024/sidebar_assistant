@@ -6,6 +6,7 @@
   // 高亮当前聚焦的输入框
   let highlightedElement = null;
   let highlightOverlay = null;
+  let arrowOverlay = null;
 
   // 监听来自 Side Panel 的消息
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -16,7 +17,7 @@
       const result = insertTextToFocusedElement(request.text);
       sendResponse(result);
     } else if (request.action === 'highlightInput') {
-      highlightFocusedInput();
+      highlightFocusedInputWithArrow();
       sendResponse({ success: true });
     } else if (request.action === 'clearHighlight') {
       clearHighlight();
@@ -91,8 +92,139 @@
     return { success: false, error: '当前聚焦的元素不是可输入元素' };
   }
 
-  // 高亮当前聚焦的输入框
-  function highlightFocusedInput() {
+  // 生成手绘风格的随机扰动路径点
+  function generateRoughPoints(x1, y1, x2, y2, segments = 20) {
+    const points = [];
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments;
+      // 基础线性插值
+      let x = x1 + dx * t;
+      let y = y1 + dy * t;
+      
+      // 添加手绘风格的随机扰动（中间部分扰动更大）
+      const roughness = 3;
+      const randomOffset = Math.sin(t * Math.PI) * roughness;
+      x += (Math.random() - 0.5) * randomOffset * 2;
+      y += (Math.random() - 0.5) * randomOffset * 2;
+      
+      points.push({ x, y });
+    }
+    return points;
+  }
+
+  // 生成平滑的手绘风格 SVG 路径
+  function generateRoughPath(x1, y1, x2, y2) {
+    const points = generateRoughPoints(x1, y1, x2, y2);
+    
+    // 使用二次贝塞尔曲线连接点，创建平滑但有机的线条
+    let path = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
+    
+    for (let i = 1; i < points.length - 1; i++) {
+      const xc = (points[i].x + points[i + 1].x) / 2;
+      const yc = (points[i].y + points[i + 1].y) / 2;
+      path += ` Q ${points[i].x.toFixed(1)} ${points[i].y.toFixed(1)}, ${xc.toFixed(1)} ${yc.toFixed(1)}`;
+    }
+    
+    // 连接到终点
+    const last = points[points.length - 1];
+    path += ` L ${last.x.toFixed(1)} ${last.y.toFixed(1)}`;
+    
+    return path;
+  }
+
+  // 生成手绘风格的箭头头部路径
+  function generateRoughArrowHead(tipX, tipY, angle, size = 20) {
+    const leftAngle = angle + Math.PI / 6 + (Math.random() - 0.5) * 0.2;
+    const rightAngle = angle - Math.PI / 6 + (Math.random() - 0.5) * 0.2;
+    
+    const leftX = tipX - Math.cos(leftAngle) * size;
+    const leftY = tipY - Math.sin(leftAngle) * size;
+    const rightX = tipX - Math.cos(rightAngle) * size;
+    const rightY = tipY - Math.sin(rightAngle) * size;
+    
+    // 添加轻微扰动使线条更自然
+    const r1 = 2;
+    const r2 = 2;
+    
+    return `M ${(tipX + (Math.random() - 0.5) * r1).toFixed(1)} ${(tipY + (Math.random() - 0.5) * r1).toFixed(1)} ` +
+           `L ${(leftX + (Math.random() - 0.5) * r2).toFixed(1)} ${(leftY + (Math.random() - 0.5) * r2).toFixed(1)} ` +
+           `M ${(tipX + (Math.random() - 0.5) * r1).toFixed(1)} ${(tipY + (Math.random() - 0.5) * r1).toFixed(1)} ` +
+           `L ${(rightX + (Math.random() - 0.5) * r2).toFixed(1)} ${(rightY + (Math.random() - 0.5) * r2).toFixed(1)}`;
+  }
+
+  // 创建手绘风格的 SVG 箭头
+  function createHandDrawnArrow(targetRect) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      pointer-events: none;
+      z-index: 999999;
+    `;
+    svg.setAttribute('width', '100%');
+    svg.setAttribute('height', '100%');
+    svg.setAttribute('viewBox', `0 0 ${window.innerWidth} ${window.innerHeight}`);
+    
+    // 计算箭头起点（从页面右侧边缘往内缩进，尾巴长度约 48-60px）
+    const startX = window.innerWidth - 60;
+    const startY = window.innerHeight / 2;
+    
+    // 计算箭头终点（输入框中心）
+    const endX = targetRect.left + targetRect.width / 2;
+    const endY = targetRect.top + targetRect.height / 2;
+    
+    // 计算箭头角度
+    const angle = Math.atan2(endY - startY, endX - startX);
+    
+    // 创建滤镜用于手绘效果
+    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+    const filter = document.createElementNS('http://www.w3.org/2000/svg', 'filter');
+    filter.setAttribute('id', 'rough-filter');
+    filter.innerHTML = `
+      <feTurbulence type="fractalNoise" baseFrequency="0.05" numOctaves="2" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="2" xChannelSelector="R" yChannelSelector="G"/>
+    `;
+    defs.appendChild(filter);
+    svg.appendChild(defs);
+    
+    // 使用二次贝塞尔曲线创建平滑曲线路径
+    const roughPath = generateRoughPath(startX, startY, endX, endY);
+    
+    // 创建路径元素
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', roughPath);
+    path.setAttribute('stroke', '#1a1a1a');
+    path.setAttribute('stroke-width', '4');
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    path.setAttribute('filter', 'url(#rough-filter)');
+    
+    // 创建箭头头部
+    const arrowHeadPath = generateRoughArrowHead(endX, endY, angle, 18);
+    const arrowHead = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    arrowHead.setAttribute('d', arrowHeadPath);
+    arrowHead.setAttribute('stroke', '#1a1a1a');
+    arrowHead.setAttribute('stroke-width', '4');
+    arrowHead.setAttribute('fill', 'none');
+    arrowHead.setAttribute('stroke-linecap', 'round');
+    arrowHead.setAttribute('stroke-linejoin', 'round');
+    arrowHead.setAttribute('filter', 'url(#rough-filter)');
+    
+    svg.appendChild(path);
+    svg.appendChild(arrowHead);
+    
+    return svg;
+  }
+
+  // 使用手绘箭头高亮当前聚焦的输入框
+  function highlightFocusedInputWithArrow() {
     clearHighlight();
     
     const activeElement = document.activeElement;
@@ -103,36 +235,11 @@
     highlightedElement = activeElement;
     const rect = activeElement.getBoundingClientRect();
     
-    highlightOverlay = document.createElement('div');
-    highlightOverlay.style.cssText = `
-      position: fixed;
-      top: ${rect.top - 4}px;
-      left: ${rect.left - 4}px;
-      width: ${rect.width + 8}px;
-      height: ${rect.height + 8}px;
-      border: 2px solid #22C55E;
-      border-radius: 6px;
-      pointer-events: none;
-      z-index: 999999;
-      animation: ai-sidebar-pulse 1.5s ease-in-out infinite;
-    `;
+    // 创建手绘风格箭头
+    arrowOverlay = createHandDrawnArrow(rect);
+    document.body.appendChild(arrowOverlay);
     
-    // 添加动画样式
-    if (!document.getElementById('ai-sidebar-styles')) {
-      const style = document.createElement('style');
-      style.id = 'ai-sidebar-styles';
-      style.textContent = `
-        @keyframes ai-sidebar-pulse {
-          0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
-          50% { box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
-        }
-      `;
-      document.head.appendChild(style);
-    }
-    
-    document.body.appendChild(highlightOverlay);
-    
-    // 3秒后自动清除高亮
+    // 3秒后自动清除
     setTimeout(clearHighlight, 3000);
   }
 
@@ -141,6 +248,10 @@
     if (highlightOverlay) {
       highlightOverlay.remove();
       highlightOverlay = null;
+    }
+    if (arrowOverlay) {
+      arrowOverlay.remove();
+      arrowOverlay = null;
     }
     highlightedElement = null;
   }
@@ -171,7 +282,7 @@
 
   // 监听聚焦事件，自动清除旧高亮
   document.addEventListener('focusin', () => {
-    if (highlightOverlay) {
+    if (highlightOverlay || arrowOverlay) {
       clearHighlight();
     }
   }, true);
