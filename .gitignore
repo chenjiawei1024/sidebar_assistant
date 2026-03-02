@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 *.log
+.hik/
 
 # Build outputs
 dist/
