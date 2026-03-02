@@ -333,7 +333,7 @@ body {
 .message-content {
   flex: 1;
   padding: 10px 12px;
-  padding-bottom: 32px; /* 为底部按钮留出空间 */
+  padding-bottom: 40px; /* 为底部按钮留出更多空间 */
   background-color: var(--bg-secondary);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-color);
@@ -655,6 +655,7 @@ body {
 /* Think 标签样式 - 用于展示模型的思考过程 */
 .message-content .think-block {
   margin: 8px 0;
+  margin-bottom: 12px; /* 增加与下方内容的间距 */
   background-color: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
