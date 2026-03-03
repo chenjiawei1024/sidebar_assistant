@@ -1,7 +1,7 @@
 // Background Service Worker - 处理 API 请求（避免 CORS 限制）
 
 // 默认 API 地址
-const DEFAULT_API_URL = 'http://lanz.hikvision.com/v3/openai';
+const DEFAULT_API_URL = 'http://lanz.hikvision.com/v3/openai/model';
 
 // 监听来自侧边栏的长连接（用于流式传输）
 chrome.runtime.onConnect.addListener((port) => {

@@ -139,7 +139,7 @@
       tailLength: 60,
       color: '#1a1a1a',
       strokeWidth: 4,
-      duration: 3000
+      duration: 2000
     });
 
     return { success: true };
@@ -325,7 +325,7 @@
     }
     
     // 回退到 body 文本
-    return document.body.innerText.substring(0, 3000);
+    return document.body.innerText.substring(0, 2000);
   }
 
   // ==================== 事件监听 ====================

@@ -273,7 +273,7 @@ class HandDrawnOverlay {
    * @param {string} options.color - 箭头颜色（默认 #1a1a1a）
    * @param {number} options.strokeWidth - 线条宽度（默认 4）
    * @param {number} options.headSize - 箭头头部大小（默认 18）
-   * @param {number} options.duration - 显示时长 ms，0 表示永久（默认 3000）
+   * @param {number} options.duration - 显示时长 ms，0 表示永久（默认 2000）
    * @returns {string} 覆盖层 ID
    * 
    * @example
@@ -327,7 +327,7 @@ class HandDrawnOverlay {
     svg.appendChild(head);
     document.body.appendChild(svg);
     
-    const duration = options.duration !== undefined ? options.duration : 3000;
+    const duration = options.duration !== undefined ? options.duration : 2000;
     return this._saveOverlay(svg, 'arrow', duration);
   }
 
@@ -341,7 +341,7 @@ class HandDrawnOverlay {
    * @param {number} options.strokeWidth - 边框宽度（默认 3）
    * @param {string} options.fill - 填充颜色（默认 rgba(255,193,7,0.1)）
    * @param {number} options.roughness - 手绘粗糙度（默认 3）
-   * @param {number} options.duration - 显示时长 ms，0 表示永久（默认 3000）
+   * @param {number} options.duration - 显示时长 ms，0 表示永久（默认 2000）
    * @returns {string} 覆盖层 ID
    * 
    * @example
@@ -389,7 +389,7 @@ class HandDrawnOverlay {
     svg.appendChild(rect);
     document.body.appendChild(svg);
     
-    const duration = options.duration !== undefined ? options.duration : 3000;
+    const duration = options.duration !== undefined ? options.duration : 2000;
     return this._saveOverlay(svg, 'rect', duration);
   }
 
@@ -400,7 +400,7 @@ class HandDrawnOverlay {
    * @param {Object} options - 配置选项
    * @param {Object} options.arrowOptions - 箭头专属选项
    * @param {Object} options.rectOptions - 矩形专属选项
-   * @param {number} options.duration - 整体显示时长（默认 3000）
+   * @param {number} options.duration - 整体显示时长（默认 2000）
    * @returns {Object} { arrowId, rectId } 两个覆盖层 ID
    * 
    * @example
@@ -424,7 +424,7 @@ class HandDrawnOverlay {
     });
     
     // 统一设置持续时间
-    const duration = options.duration !== undefined ? options.duration : 3000;
+    const duration = options.duration !== undefined ? options.duration : 2000;
     if (duration > 0) {
       setTimeout(() => {
         this.remove(rectId);

@@ -24,7 +24,7 @@ function validateApiKey(key) {
 // ==================== Main Application ====================
 
 // Configuration - 默认值
-const DEFAULT_API_URL = 'http://lanz.hikvision.com/v3/openai';
+const DEFAULT_API_URL = 'http://lanz.hikvision.com/v3/openai/model';
 const DEFAULT_MODEL = 'Qwen3-Coder-Flash';
 const STORAGE_KEY_API_URL = 'ai_sidebar_api_url';
 const STORAGE_KEY_API_KEY = 'ai_sidebar_api_key';
